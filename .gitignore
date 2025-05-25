@@ -1,0 +1,7 @@
+src/petsciiboy.asm
+resources/petsciiboy.vchar64proj
+resources/background.petmate
+src/petsciiboy.int
+src/petsciiboy.lbl
+src/petsciiboy.map
+src/petsciiboy.prg
