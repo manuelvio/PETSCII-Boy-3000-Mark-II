@@ -13,7 +13,7 @@
 #include <c64/sprites.h>
 #include <c64/cia.h>
 #include "neuralnet.h"
-#include "stringutils.h"
+
 /*
 MIT License
 
