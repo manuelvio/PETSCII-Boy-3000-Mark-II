@@ -5,3 +5,9 @@ src/petsciiboy.int
 src/petsciiboy.lbl
 src/petsciiboy.map
 src/petsciiboy.prg
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+dist/petsciiboy.asm
+dist/petsciiboy.int
+dist/petsciiboy.lbl
+dist/petsciiboy.map
