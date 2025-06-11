@@ -112,11 +112,10 @@ const char sprite_data[] = {
 
 #define CANVAS_COLOR  VCOL_GREEN
 
-#define CANVAS_PIXEL_OFF ' '
-#define CANVAS_PIXEL_ON '*'
+#define CANVAS_PIXEL_OFF    ' '
+#define CANVAS_PIXEL_ON     '*'
 
 #define BATCHES_COUNT 16
-
 
 CharWin cw_menu;
 CharWin cw_terminal;
@@ -126,6 +125,8 @@ char terminal_buf[37];
 char batch_filename[13];
 batch_t batch;
 uint8_t batch_indexes[] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
+
+// PETSCII char codes of nine histogram levels, ordered from lowest (0) to higher (8)
 static const char activation_histogram_levels[9] = { 32, 100, 111, 121, 98, 248, 247, 227, 224 };
 
 
@@ -170,7 +171,9 @@ static const char * drawing_menu_texts[] = {
 };
 
 // Small round function to be inlined
-static inline int8_t round_to_uint8(float x) {
+// Candidate to be converted into a macro
+static inline int8_t round_to_uint8(float x)
+{
     return (x >= 0) ? (int8_t)(x + 0.5) : (int8_t)(x - 0.5);
 }
 
@@ -195,11 +198,11 @@ void shuffle_array(uint8_t arr[], int size)
 /*
  * Displays main menu data
  */
-void display_menu(const char **menu, uint8_t items_count)
+void display_menu(CharWin* win, const char **menu, uint8_t items_count)
 {
-    cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
+    cwin_fill_rect(win, 0, 0, win->wx, win->wy, ' ', MENU_COLOR);
     for (uint8_t entry_id = 0; entry_id < items_count; entry_id++) {
-        cwin_putat_string(&cw_menu, 0, entry_id, menu[entry_id], MENU_COLOR);
+        cwin_putat_string(win, 0, entry_id, menu[entry_id], MENU_COLOR);
     }
 }
 
@@ -241,7 +244,6 @@ void terminal_log(const char *str)
     cwin_putat_string(&cw_terminal, 0, cw_terminal.wy-1, str, TERMINAL_COLOR);
 }
 
-
 /*
  * Loads a batch of records from disk, returns the number of loaded items
  */
@@ -264,8 +266,7 @@ uint8_t load_training_batch(const char *filename, uint8_t device, batch_t dest)
         }
 		krnio_close(2);
 	}
-    return loaded_records;    
-
+    return loaded_records;
 }
 
 /*
@@ -519,10 +520,10 @@ void application_state(ApplicationState state)
 
 	switch (state) {
 	case AS_READY:
-        display_menu(main_menu_texts, ARRAY_SIZE(main_menu_texts));
+        display_menu(&cw_menu, main_menu_texts, ARRAY_SIZE(main_menu_texts));
         break;
 	case AS_TRAINING:
-        display_menu(training_menu_texts, ARRAY_SIZE(training_menu_texts));
+        display_menu(&cw_menu, training_menu_texts, ARRAY_SIZE(training_menu_texts));
         train_loop(EPOCHS);
         application_state(AS_READY);
         break;
@@ -551,7 +552,7 @@ void application_state(ApplicationState state)
         application_state(AS_READY);
         break;
 	case AS_DRAWING:
-        display_menu(drawing_menu_texts, ARRAY_SIZE(drawing_menu_texts));
+        display_menu(&cw_menu, drawing_menu_texts, ARRAY_SIZE(drawing_menu_texts));
         draw_and_predict();
         application_state(AS_READY);
         break;
@@ -594,6 +595,9 @@ void main_loop()
 
 int main(void)
 {
+    // Fixed random seed to simplify debugging
+    srand(74);
+
     // Install trampoline
     mmap_trampoline();
 	
