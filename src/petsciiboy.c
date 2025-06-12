@@ -235,13 +235,13 @@ int load_bytes(const char *filename, uint8_t device, void *dest, int size)
 }
 
 /*
- * Scrolls up terminal and adds a new row of text
+ * Scrolls up window and adds a new row of text
  */
-void terminal_log(const char *str)
+void window_log(CharWin* win, const char *str)
 {
-    cwin_scroll_up(&cw_terminal, 1);
-    cwin_fill_rect(&cw_terminal, 0, cw_terminal.wy-1, cw_terminal.wx, 1, ' ', TERMINAL_COLOR);
-    cwin_putat_string(&cw_terminal, 0, cw_terminal.wy-1, str, TERMINAL_COLOR);
+    cwin_scroll_up(win, 1);
+    cwin_fill_rect(win, 0, win->wy - 1, win->wx, 1, ' ', TERMINAL_COLOR);
+    cwin_putat_string(win, 0, win->wy - 1, str, TERMINAL_COLOR);
 }
 
 /*
@@ -273,9 +273,9 @@ uint8_t load_training_batch(const char *filename, uint8_t device, batch_t dest)
  * Display a message and wait for a Yes/No answer, returns true/false accordingly
  * In this case everything different from a 'Y' is false
  */
-bool confirm(const char * msg)
+bool confirm(CharWin* win, const char * msg)
 {
-    terminal_log(msg);
+    window_log(win, msg);
     return getch() == 89;
 }
 
@@ -315,9 +315,9 @@ void train_loop(uint8_t epochs)
     bool stop = false;
     uint8_t loaded = 0;
     uint16_t total = epochs * TRAINING_RECORD_COUNT;
-    terminal_log("IT WILL TAKE A LOT OF TIME");
-    terminal_log("MAKE A CUP OF TEA");
-    terminal_log("PUT A RECORD ON");
+    window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
+    window_log(&cw_terminal, "MAKE A CUP OF TEA");
+    window_log(&cw_terminal, "PUT A RECORD ON");
     init_network();
     for(uint8_t epoch = 0; epoch < epochs; epoch++) {
         if (stop) break;
@@ -334,7 +334,7 @@ void train_loop(uint8_t epochs)
             // Load batch data in memory
             sprintf(batch_filename, "NEURAL%02X,U,R", batch_indexes[b]);
             sprintf(terminal_buf, "LOADING %d - %d NEURAL%02X", b, batch_indexes[b], batch_indexes[b]);
-            terminal_log(terminal_buf);
+            window_log(&cw_terminal, terminal_buf);
             spr_show(0, false);
             batch_length = load_training_batch(batch_filename, DRIVE_NO, batch);
             spr_show(0, true);
@@ -345,9 +345,9 @@ void train_loop(uint8_t epochs)
                 draw_digit(batch[record]);
                 train(batch[record], batch[record][BATCH_ROW_LENGTH - 1]);
                 sprintf(terminal_buf, "RECORDS REMAINING: %d", --total);
-                terminal_log(terminal_buf);
+                window_log(&cw_terminal, terminal_buf);
                 if (kbhit()) {
-                    stop = confirm("STOP TRAINING? (Y/N)");
+                    stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
                 }
             }
 
@@ -361,15 +361,15 @@ void train_loop(uint8_t epochs)
                 petscii_histogram(19, 4, activations_output, OUTPUT_LAYER_SIZE);
                 correct += batch[record][BATCH_ROW_LENGTH - 1] == predicted;
                 sprintf(terminal_buf, "ACCURACY=%.2f", ((float)correct / processed) * 100);
-                terminal_log(terminal_buf);
+                window_log(&cw_terminal, terminal_buf);
                 if (kbhit()) {
-                    stop = confirm("STOP TRAINING? (Y/N)");
+                    stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
                 }
             }
         }
     }
     if (stop) {
-        terminal_log("TRAINING STOPPED");
+        window_log(&cw_terminal, "TRAINING STOPPED");
     }
     spr_show(0, false);
 }
@@ -468,14 +468,14 @@ void draw_and_predict()
             switch (c) {
             case PETSCII_F1:
                 input_mode = JOYSTICK;
-                terminal_log("INPUT MODE: JOYSTICK");
+                window_log(&cw_terminal, "INPUT MODE: JOYSTICK");
                 break;
             case PETSCII_F3:
                 input_mode = LIGHT_PEN;
-                terminal_log("INPUT MODE: LIGHTPEN");
+                window_log(&cw_terminal, "INPUT MODE: LIGHTPEN");
                 break;
             case PETSCII_F5:
-                done = confirm("EXIT DRAWING? (Y/N)");
+                done = confirm(&cw_terminal, "EXIT DRAWING? (Y/N)");
                 break;
             }
         }
@@ -493,19 +493,19 @@ void draw_and_predict()
     petscii_histogram(19, 4, activations_output, OUTPUT_LAYER_SIZE);
     display_char(predicted);
     sprintf(terminal_buf, "I THINK YOU WROTE A %d", predicted);
-    terminal_log(terminal_buf);
+    window_log(&cw_terminal, terminal_buf);
 
     // Collecting user's feedback about prediction and adjusting parameters
-    if (!confirm("AM I RIGHT?")) {
+    if (!confirm(&cw_terminal, "AM I RIGHT?")) {
         bool is_number = false;
         do {
-            terminal_log("ENTER THE CORRECT DIGIT (0-9)");
+            window_log(&cw_terminal, "ENTER THE CORRECT DIGIT (0-9)");
             char answer = getch();
             is_number = answer >= 48 && answer <= 57;
             if (is_number) predicted = answer - 48;
         } while (!is_number);
     }
-    terminal_log("ADJUSTING WEIGHTS...");
+    window_log(&cw_terminal, "ADJUSTING WEIGHTS...");
     train(current_input, predicted);
     spr_show(0, false);
 }
@@ -529,25 +529,25 @@ void application_state(ApplicationState state)
         break;
 	case AS_SAVING:
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
-        if (confirm("ARE YOU SURE? (Y/N)")) {
-            terminal_log("SAVING PARAMETERS...");
+        if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
+            window_log(&cw_terminal, "SAVING PARAMETERS...");
             save_bytes("@0:WH,U,W", DRIVE_NO, weights_hidden, sizeof(weights_hidden));
             save_bytes("@0:WO,U,W", DRIVE_NO, weights_output, sizeof(weights_output));
             save_bytes("@0:BH,U,W", DRIVE_NO, biases_hidden, sizeof(biases_hidden));
             save_bytes("@0:BO,U,W", DRIVE_NO, biases_output, sizeof(biases_output));
-            terminal_log("...DONE");
+            window_log(&cw_terminal, "...DONE");
         }
         application_state(AS_READY);
         break;
 	case AS_LOADING:
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
-        if (confirm("ARE YOU SURE? (Y/N)")) {
-            terminal_log("LOADING PARAMETERS...");
+        if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
+            window_log(&cw_terminal, "LOADING PARAMETERS...");
             load_bytes("WH,U,R", DRIVE_NO, weights_hidden, sizeof(weights_hidden));
             load_bytes("WO,U,R", DRIVE_NO, weights_output, sizeof(weights_output));
             load_bytes("BH,U,R", DRIVE_NO, biases_hidden, sizeof(biases_hidden));
             load_bytes("BO,U,R", DRIVE_NO, biases_output, sizeof(biases_output));
-            terminal_log("...DONE");
+            window_log(&cw_terminal, "...DONE");
         }
         application_state(AS_READY);
         break;
@@ -627,7 +627,7 @@ int main(void)
     spr_init(Screen);
     oscar_expand_lzo(Sprite0, sprite_data);    
     spr_set(0, false, 304, 58, (unsigned)Sprite0 / 64, VCOL_LT_GREEN, false, true, true);
-    spr_set(1, false, 8+24, 58, ((unsigned)Sprite0 / 64) + 1, VCOL_LT_RED, false, false, false);
+    spr_set(1, false, 8 + 24, 58, ((unsigned)Sprite0 / 64) + 1, VCOL_LT_RED, false, false, false);
 
     // Windows initialization
     cwin_init(&cw_terminal, Screen, TERMINAL_LEFT, TERMINAL_TOP, TERMINAL_WIDTH, TERMINAL_HEIGHT);
@@ -635,7 +635,7 @@ int main(void)
     cwin_init(&cw_canvas, Screen, CANVAS_LEFT, CANVAS_TOP, CANVAS_WIDTH, CANVAS_HEIGHT);
     
     application_state(AS_READY);
-	
+
     for(;;) {
 		main_loop();
     }
