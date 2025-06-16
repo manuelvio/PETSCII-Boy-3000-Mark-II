@@ -150,9 +150,10 @@ enum InputMode {
 
 // Current state of the application
 struct Application {
-	ApplicationState	state;		// State
+	ApplicationState	state;		     // Main application state
     uint8_t             epochs_left;     // Epochs to be processed
     uint8_t             batches_left;
+    NeuralNetwork       neural_network;  // Our neural network parameters
 }	TheApplication;
 
 static const char * main_menu_texts[] = {
@@ -274,7 +275,7 @@ void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
  * Main training loop, iterates over the input batches for the epochs number
  * Every batch is used for training and checked to compute overall network accuracy
  */
-void train_loop(uint8_t epochs)
+void train_loop(NeuralNetwork *neural_network, uint8_t epochs)
 {
     bool stop = false;
     uint8_t loaded = 0;
@@ -283,7 +284,7 @@ void train_loop(uint8_t epochs)
     window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
     window_log(&cw_terminal, "MAKE A CUP OF TEA");
     window_log(&cw_terminal, "PUT A RECORD ON");
-    init_network();
+    init_network(neural_network);
     for(uint8_t epoch = 0; epoch < epochs; epoch++) {
         if (stop) break;
 
@@ -307,7 +308,7 @@ void train_loop(uint8_t epochs)
             for(uint8_t record = 0; record < batch_length; record++) {
                 if (stop) break;
                 draw_digit(batch[record]);
-                train(batch[record], batch[record][BATCH_ROW_LENGTH - 1]);
+                train(neural_network, batch[record], batch[record][BATCH_ROW_LENGTH - 1]);
                 sprintf(terminal_buf, "RECORDS REMAINING: %d", --total);
                 window_log(&cw_terminal, terminal_buf);
                 if (kbhit()) {
@@ -320,9 +321,9 @@ void train_loop(uint8_t epochs)
                 if (stop) break;
                 processed++;
                 draw_digit(batch[record]);
-                uint8_t predicted  = predict(batch[record]);
-                petscii_histogram(19, 2, activations_hidden, HIDDEN_LAYER_SIZE);
-                petscii_histogram(19, 4, activations_output, OUTPUT_LAYER_SIZE);
+                uint8_t predicted  = predict(neural_network, batch[record]);
+                petscii_histogram(19, 2, neural_network->activations_hidden, HIDDEN_LAYER_SIZE);
+                petscii_histogram(19, 4, neural_network->activations_output, OUTPUT_LAYER_SIZE);
                 correct += batch[record][BATCH_ROW_LENGTH - 1] == predicted;
                 sprintf(terminal_buf, "ACCURACY=%.2f", ((float)correct / processed) * 100);
                 window_log(&cw_terminal, terminal_buf);
@@ -390,7 +391,7 @@ void display_char(uint8_t digit)
  * Let the user write a digit and, once finished, tries to recognize it
  * After the prediction user's feedback is used to further finetune network parameters
  */
-void draw_and_predict()
+void draw_and_predict(NeuralNetwork *neural_network)
 {
     input_t current_input;
     cwin_fill_rect(&cw_canvas, 0, 0, cw_canvas.wx, cw_canvas.wy, ' ', CANVAS_COLOR);
@@ -452,9 +453,9 @@ void draw_and_predict()
     canvas_to_input(&cw_canvas, current_input);
     draw_digit(current_input);
     spr_show(0, true);
-    uint8_t predicted = predict(current_input);
-    petscii_histogram(19, 2, activations_hidden, HIDDEN_LAYER_SIZE);
-    petscii_histogram(19, 4, activations_output, OUTPUT_LAYER_SIZE);
+    uint8_t predicted = predict(neural_network, current_input);
+    petscii_histogram(19, 2, neural_network->activations_hidden, HIDDEN_LAYER_SIZE);
+    petscii_histogram(19, 4, neural_network->activations_output, OUTPUT_LAYER_SIZE);
     display_char(predicted);
     sprintf(terminal_buf, "I THINK YOU WROTE A %d", predicted);
     window_log(&cw_terminal, terminal_buf);
@@ -470,7 +471,7 @@ void draw_and_predict()
         } while (!is_number);
     }
     window_log(&cw_terminal, "ADJUSTING WEIGHTS...");
-    train(current_input, predicted);
+    train(neural_network, current_input, predicted);
     spr_show(0, false);
 }
 
@@ -488,17 +489,17 @@ void application_state(ApplicationState state)
         break;
 	case AS_TRAINING:
         display_menu(&cw_menu, training_menu_texts, ARRAY_SIZE(training_menu_texts));
-        train_loop(EPOCHS);
+        train_loop(&TheApplication.neural_network, EPOCHS);
         application_state(AS_READY);
         break;
 	case AS_SAVING:
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
         if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
             window_log(&cw_terminal, "SAVING PARAMETERS...");
-            save_bytes("@0:WH,U,W", DRIVE_NO, weights_hidden, sizeof(weights_hidden));
-            save_bytes("@0:WO,U,W", DRIVE_NO, weights_output, sizeof(weights_output));
-            save_bytes("@0:BH,U,W", DRIVE_NO, biases_hidden, sizeof(biases_hidden));
-            save_bytes("@0:BO,U,W", DRIVE_NO, biases_output, sizeof(biases_output));
+            save_bytes("@0:WH,U,W", DRIVE_NO, TheApplication.neural_network.weights_hidden, sizeof(TheApplication.neural_network.weights_hidden));
+            save_bytes("@0:WO,U,W", DRIVE_NO, TheApplication.neural_network.weights_output, sizeof(TheApplication.neural_network.weights_output));
+            save_bytes("@0:BH,U,W", DRIVE_NO, TheApplication.neural_network.biases_hidden, sizeof(TheApplication.neural_network.biases_hidden));
+            save_bytes("@0:BO,U,W", DRIVE_NO, TheApplication.neural_network.biases_output, sizeof(TheApplication.neural_network.biases_output));
             window_log(&cw_terminal, "...DONE");
         }
         application_state(AS_READY);
@@ -507,17 +508,17 @@ void application_state(ApplicationState state)
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
         if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
             window_log(&cw_terminal, "LOADING PARAMETERS...");
-            load_bytes("WH,U,R", DRIVE_NO, weights_hidden, sizeof(weights_hidden));
-            load_bytes("WO,U,R", DRIVE_NO, weights_output, sizeof(weights_output));
-            load_bytes("BH,U,R", DRIVE_NO, biases_hidden, sizeof(biases_hidden));
-            load_bytes("BO,U,R", DRIVE_NO, biases_output, sizeof(biases_output));
+            load_bytes("WH,U,R", DRIVE_NO, TheApplication.neural_network.weights_hidden, sizeof(TheApplication.neural_network.weights_hidden));
+            load_bytes("WO,U,R", DRIVE_NO, TheApplication.neural_network.weights_output, sizeof(TheApplication.neural_network.weights_output));
+            load_bytes("BH,U,R", DRIVE_NO, TheApplication.neural_network.biases_hidden, sizeof(TheApplication.neural_network.biases_hidden));
+            load_bytes("BO,U,R", DRIVE_NO, TheApplication.neural_network.biases_output, sizeof(TheApplication.neural_network.biases_output));
             window_log(&cw_terminal, "...DONE");
         }
         application_state(AS_READY);
         break;
 	case AS_DRAWING:
         display_menu(&cw_menu, drawing_menu_texts, ARRAY_SIZE(drawing_menu_texts));
-        draw_and_predict();
+        draw_and_predict(&TheApplication.neural_network);
         application_state(AS_READY);
         break;
     }
