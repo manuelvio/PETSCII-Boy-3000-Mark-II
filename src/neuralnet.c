@@ -1,5 +1,6 @@
 #include <math.h>
 #include <limits.h>
+#include <stdlib.h>
 #include "neuralnet.h"
 
 /*

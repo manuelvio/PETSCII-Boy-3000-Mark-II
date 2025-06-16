@@ -12,7 +12,9 @@
 #include <c64/kernalio.h>
 #include <c64/sprites.h>
 #include <c64/cia.h>
+#include <c64/rasterirq.h>
 #include "neuralnet.h"
+#include "batch.h"
 
 /*
 MIT License
@@ -21,7 +23,8 @@ Copyright (c) 2025-Present Manuel Vio
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
+in the Software without restriction, i++
+ncluding without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
@@ -65,7 +68,7 @@ char petmate_color[1000] = {
 };
 
 #pragma section(sprites, 0)
-#pragma region(sprites, 0xb770, 0xb800, , , {sprites})
+#pragma region(sprites, 0xb700, 0xb800, , , {sprites})
 #pragma data(sprites)
 
 const char sprite_data[] = {
@@ -121,10 +124,10 @@ CharWin cw_menu;
 CharWin cw_terminal;
 CharWin cw_canvas;
 
+// Buffer used for terminal output
 char terminal_buf[37];
-char batch_filename[13];
+
 batch_t batch;
-uint8_t batch_indexes[] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
 
 // PETSCII char codes of nine histogram levels, ordered from lowest (0) to higher (8)
 static const char activation_histogram_levels[9] = { 32, 100, 111, 121, 98, 248, 247, 227, 224 };
@@ -180,20 +183,6 @@ static inline int8_t round_to_uint8(float x)
 // Forward declaration
 void application_state(ApplicationState state);
 
-/*
- * Shuffles an array of bytes using Sattolo's algorithm
- * Lovely coincidence, Sandra Sattolo was my Computer Science teacher back in the high school days... grazie prof!
- */
-void shuffle_array(uint8_t arr[], int size)
-{
-    int i = size;
-    while(i > 1) {
-        int j = rand() % --i;
-        uint8_t temp = arr[j];
-        arr[j] = arr[i];
-        arr[i] = temp;        
-    }
-}
 
 /*
  * Displays main menu data
@@ -245,31 +234,6 @@ void window_log(CharWin* win, const char *str)
 }
 
 /*
- * Loads a batch of records from disk, returns the number of loaded items
- */
-uint8_t load_training_batch(const char *filename, uint8_t device, batch_t dest)
-{
-    uint8_t loaded_records = 0;
-	krnio_setnam(filename);	
-	if (krnio_open(2, (char)device, 2)) {
-        for(uint8_t row = 0; row < BATCH_ROW_COUNT_MAX; row++) {
-            int ch;
-            for(uint8_t row_item = 0; row_item < BATCH_ROW_LENGTH; row_item++) {
-                ch = krnio_getch(2);
-                if (ch & 0x100) break;
-                dest[row][row_item] = ch;
-            }
-            if (ch & 0x100) {
-                loaded_records = row + 1;
-                break;
-            }
-        }
-		krnio_close(2);
-	}
-    return loaded_records;
-}
-
-/*
  * Display a message and wait for a Yes/No answer, returns true/false accordingly
  * In this case everything different from a 'Y' is false
  */
@@ -315,6 +279,7 @@ void train_loop(uint8_t epochs)
     bool stop = false;
     uint8_t loaded = 0;
     uint16_t total = epochs * TRAINING_RECORD_COUNT;
+    
     window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
     window_log(&cw_terminal, "MAKE A CUP OF TEA");
     window_log(&cw_terminal, "PUT A RECORD ON");
@@ -332,11 +297,10 @@ void train_loop(uint8_t epochs)
             if (stop) break;
 
             // Load batch data in memory
-            sprintf(batch_filename, "NEURAL%02X,U,R", batch_indexes[b]);
             sprintf(terminal_buf, "LOADING %d - %d NEURAL%02X", b, batch_indexes[b], batch_indexes[b]);
             window_log(&cw_terminal, terminal_buf);
             spr_show(0, false);
-            batch_length = load_training_batch(batch_filename, DRIVE_NO, batch);
+            batch_length = load_training_batch(b, DRIVE_NO, batch);
             spr_show(0, true);
             
             // Training phase
@@ -603,7 +567,7 @@ int main(void)
 	
     // make all of RAM visible to the CPU
 	mmap_set(MMAP_RAM);
-	
+
     // place custom font
 	memcpy(Charset, charset, 2048);
     
@@ -637,7 +601,7 @@ int main(void)
     application_state(AS_READY);
 
     for(;;) {
-		main_loop();
+        main_loop();
     }
 
     // Exit program, restoring default memory mapping
