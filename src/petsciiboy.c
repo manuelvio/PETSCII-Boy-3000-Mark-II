@@ -127,7 +127,6 @@ CharWin cw_canvas;
 // Buffer used for terminal output
 char terminal_buf[37];
 
-batch_t batch;
 
 // PETSCII char codes of nine histogram levels, ordered from lowest (0) to higher (8)
 static const char activation_histogram_levels[9] = { 32, 100, 111, 121, 98, 248, 247, 227, 224 };
@@ -155,6 +154,8 @@ struct Application {
     uint8_t             batches_left;
     NeuralNetwork       neural_network;  // Our neural network parameters
 }	TheApplication;
+
+Training training;
 
 static const char * main_menu_texts[] = {
   "F1-TRAIN",
@@ -275,66 +276,50 @@ void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
  * Main training loop, iterates over the input batches for the epochs number
  * Every batch is used for training and checked to compute overall network accuracy
  */
-void train_loop(NeuralNetwork *neural_network, uint8_t epochs)
+void train_loop(NeuralNetwork *neural_network, Training *training)
 {
     bool stop = false;
-    uint8_t loaded = 0;
-    uint16_t total = epochs * TRAINING_RECORD_COUNT;
-    
-    window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
-    window_log(&cw_terminal, "MAKE A CUP OF TEA");
-    window_log(&cw_terminal, "PUT A RECORD ON");
     init_network(neural_network);
-    for(uint8_t epoch = 0; epoch < epochs; epoch++) {
+    init_training(training);
+    spr_show(0, true);
+    while(training->batch_index > -1) {
         if (stop) break;
-
-        uint16_t correct = 0;
-        uint16_t processed = 0;
-
-        // Batches should be loaded in random order, so we're shuffling their indexes
-        shuffle_array(batch_indexes, ARRAY_SIZE(batch_indexes));
-
-        for(uint8_t b = 0; b < ARRAY_SIZE(batch_indexes); b++) {
+        load_training_batch(DRIVE_NO, training);
+        training->batch_index--;
+        for(uint8_t record = 0; record < training->loaded_records; record++) {
             if (stop) break;
-
-            // Load batch data in memory
-            sprintf(terminal_buf, "LOADING %d - %d NEURAL%02X", b, batch_indexes[b], batch_indexes[b]);
-            window_log(&cw_terminal, terminal_buf);
-            spr_show(0, false);
-            batch_length = load_training_batch(b, DRIVE_NO, batch);
-            spr_show(0, true);
-            
-            // Training phase
-            for(uint8_t record = 0; record < batch_length; record++) {
-                if (stop) break;
-                draw_digit(batch[record]);
-                train(neural_network, batch[record], batch[record][BATCH_ROW_LENGTH - 1]);
-                sprintf(terminal_buf, "RECORDS REMAINING: %d", --total);
-                window_log(&cw_terminal, terminal_buf);
-                if (kbhit()) {
-                    stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
-                }
-            }
-
-            // Verify prediction on batch data after training
-            for(uint8_t record = 0; record < batch_length; record++) {
-                if (stop) break;
-                processed++;
-                draw_digit(batch[record]);
-                uint8_t predicted  = predict(neural_network, batch[record]);
-                petscii_histogram(19, 2, neural_network->activations_hidden, HIDDEN_LAYER_SIZE);
-                petscii_histogram(19, 4, neural_network->activations_output, OUTPUT_LAYER_SIZE);
-                correct += batch[record][BATCH_ROW_LENGTH - 1] == predicted;
-                sprintf(terminal_buf, "ACCURACY=%.2f", ((float)correct / processed) * 100);
-                window_log(&cw_terminal, terminal_buf);
-                if (kbhit()) {
-                    stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
-                }
+            draw_digit(training->batch[record]);
+            train(neural_network, training->batch[record], training->batch[record][BATCH_ROW_LENGTH - 1]);
+            if (kbhit()) {
+                stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
             }
         }
     }
-    if (stop) {
-        window_log(&cw_terminal, "TRAINING STOPPED");
+    spr_show(0, false);
+}
+
+/*
+ * Accuracy loop, it takes a random batch and checks every record against current network
+ */
+void accuracy_loop(NeuralNetwork *neural_network, Training *training)
+{
+    bool stop = false;
+    init_training(training);
+    spr_show(0, true);
+    load_training_batch(DRIVE_NO, training);
+    for(uint8_t record = 0; record < training->loaded_records; record++) {
+        if (stop) break;
+        draw_digit(training->batch[record]);
+        uint8_t guessed_digit  = predict(neural_network, training->batch[record]);
+        petscii_histogram(19, 2, neural_network->activations_hidden, HIDDEN_LAYER_SIZE);
+        petscii_histogram(19, 4, neural_network->activations_output, OUTPUT_LAYER_SIZE);
+        training->correct += training->batch[record][BATCH_ROW_LENGTH - 1] == guessed_digit;
+        sprintf(terminal_buf, "ACCURACY=%.2f", ((float)training->correct / ++training->processed) * 100);
+        window_log(&cw_terminal, terminal_buf);
+
+        if (kbhit()) {
+            stop = confirm(&cw_terminal, "STOP VERIFYING? (Y/N)");
+        }
     }
     spr_show(0, false);
 }
@@ -489,7 +474,10 @@ void application_state(ApplicationState state)
         break;
 	case AS_TRAINING:
         display_menu(&cw_menu, training_menu_texts, ARRAY_SIZE(training_menu_texts));
-        train_loop(&TheApplication.neural_network, EPOCHS);
+        window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
+        window_log(&cw_terminal, "MAKE A CUP OF TEA");
+        window_log(&cw_terminal, "PUT A RECORD ON");
+        train_loop(&TheApplication.neural_network, &training);
         application_state(AS_READY);
         break;
 	case AS_SAVING:

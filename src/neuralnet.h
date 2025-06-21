@@ -57,12 +57,6 @@ enum NeuralNetworkState {
 	NS_INITIAL			// Initial state, not trained yet, weights are random 
 };
 
-  // Parameters
-
-
-// float max_output;
-uint8_t batch_length;
-
 /*
  * Sigmoid activation function
  */
