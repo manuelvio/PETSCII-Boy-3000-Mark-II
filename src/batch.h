@@ -15,6 +15,8 @@ typedef struct {
     uint8_t loaded_records; // How many records have been loaded from disk
     uint16_t correct;       // Total correct guesses
     uint16_t processed;     // How many record have been processed so far
+    uint8_t record_index;   // Current record index
+    volatile bool stopped; // Non-zero if user pressed RUN/STOP during training
 
 }  Training;
 

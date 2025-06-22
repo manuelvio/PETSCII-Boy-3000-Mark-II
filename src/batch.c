@@ -50,6 +50,7 @@ void init_training(Training *training)
     training->batch_index = (EPOCHS * BATCHES_COUNT) - 1;
     training->processed = 0;
     training->correct = 0;
+    training->stopped = false;
 }
 
 void load_training_batch(uint8_t device, Training *training)
@@ -57,6 +58,7 @@ void load_training_batch(uint8_t device, Training *training)
     char batch_filename[13];
     sprintf(batch_filename, "NEURAL%02X,U,R", batch_indexes[training->batch_index]);
     training->loaded_records = 0;
+    training->record_index = 0;
 	krnio_setnam(batch_filename);
 	if (krnio_open(2, (char)device, 2)) {
         for(uint8_t row = 0; row < BATCH_ROW_COUNT_MAX; row++) {

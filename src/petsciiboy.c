@@ -127,10 +127,11 @@ CharWin cw_canvas;
 // Buffer used for terminal output
 char terminal_buf[37];
 
+// Whenever a key is pressed during an interrupt check its value is stored here
+char last_pressed_key;
 
 // PETSCII char codes of nine histogram levels, ordered from lowest (0) to higher (8)
 static const char activation_histogram_levels[9] = { 32, 100, 111, 121, 98, 248, 247, 227, 224 };
-
 
 // Game state
 enum ApplicationState {
@@ -174,6 +175,23 @@ static const char * drawing_menu_texts[] = {
   "F3-LIGHT PEN",
   "F5-PREDICT"
 };
+
+/*
+ * Polls the keyboard and save the code of pressed key
+ * If the last key has not been processed yet, skips the check
+ * 
+ * This function is intended for use inside an interrupt driven loop
+ */
+void keypressed(void)
+{
+	if (!last_pressed_key) {
+        // Last pressed key has already been processed
+        // or no key has been pressed yet, so we can poll the keyboard
+		keyb_poll();
+        // If a key is being pressed, save its value
+		if (keyb_key & KSCAN_QUAL_DOWN) last_pressed_key = keyb_key;
+	}
+}
 
 // Small round function to be inlined
 // Candidate to be converted into a macro
@@ -247,16 +265,17 @@ bool confirm(CharWin* win, const char * msg)
 
 /*
  * Copy an array of bytes representing a digit into sprite 0 memory
- * WARNING: this function is incompatible with O2 optimization, somehow dx value
- * in the lvalue is different from dx in the rvalue. This issue does not exist when compiled
- * with minor optimization levels
  */
 void draw_digit(input_t input)
 {
-    for(uint8_t dy = 0; dy < 16; dy++) {
-        for(uint8_t dx = 0; dx < 2; dx++) {
-            Sprite0[(dy * 3) + dx] = input[(dy * 2) + dx];
-        }
+    uint8_t sprite_idx = 0;
+    uint8_t input_idx = 0;
+    for(uint8_t input_row = 0; input_row < 16; input_row++) {
+        // For every input row copy 16 bit of data and increment references
+        Sprite0[sprite_idx++] = input[input_idx++];
+        Sprite0[sprite_idx++] = input[input_idx++];
+        // Since a sprite row is made of 3 bytes and input row is 2 byte we skip to the next one
+        sprite_idx++;
     }
 }
 
@@ -278,24 +297,16 @@ void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
  */
 void train_loop(NeuralNetwork *neural_network, Training *training)
 {
-    bool stop = false;
     init_network(neural_network);
     init_training(training);
-    spr_show(0, true);
-    while(training->batch_index > -1) {
-        if (stop) break;
+    while(!training->stopped && training->batch_index > -1) {
         load_training_batch(DRIVE_NO, training);
         training->batch_index--;
-        for(uint8_t record = 0; record < training->loaded_records; record++) {
-            if (stop) break;
-            draw_digit(training->batch[record]);
-            train(neural_network, training->batch[record], training->batch[record][BATCH_ROW_LENGTH - 1]);
-            if (kbhit()) {
-                stop = confirm(&cw_terminal, "STOP TRAINING? (Y/N)");
-            }
+        while(!training->stopped && training->record_index < training->loaded_records) {
+            train(neural_network, training->batch[training->record_index], training->batch[training->record_index][BATCH_ROW_LENGTH - 1]);
+            training->record_index++;
         }
     }
-    spr_show(0, false);
 }
 
 /*
@@ -477,7 +488,9 @@ void application_state(ApplicationState state)
         window_log(&cw_terminal, "IT WILL TAKE A LOT OF TIME");
         window_log(&cw_terminal, "MAKE A CUP OF TEA");
         window_log(&cw_terminal, "PUT A RECORD ON");
+        spr_show(0, true);
         train_loop(&TheApplication.neural_network, &training);
+        spr_show(0, false);
         application_state(AS_READY);
         break;
 	case AS_SAVING:
@@ -546,6 +559,35 @@ void main_loop()
     }
 }
 
+/*
+ * This function is called at every frame using a raster interrupt
+ */
+__interrupt void frame_irq(void)
+{
+	vic.color_border++;
+	switch (TheApplication.state) {
+	case AS_TRAINING:
+        // We're training the network, if RUN/STOP is pressed flag "stopped" in Training structure is set
+        // Inside training loop the flag is checked at every step, if set training is interrupted (pun not intended)
+        keypressed();
+        if (last_pressed_key & KSCAN_QUAL_DOWN) {
+            if ((last_pressed_key & KSCAN_QUAL_MASK) == KSCAN_STOP) training.stopped = true;
+            last_pressed_key = 0;
+        }
+
+        draw_digit(training.batch[training.record_index]);
+
+        break;
+    default:
+        break;
+    }
+
+
+    vic.color_border--;
+}
+
+RIRQCode	frame_rirq;
+
 int main(void)
 {
     // Fixed random seed to simplify debugging
@@ -588,6 +630,22 @@ int main(void)
     cwin_init(&cw_canvas, Screen, CANVAS_LEFT, CANVAS_TOP, CANVAS_WIDTH, CANVAS_HEIGHT);
     
     application_state(AS_READY);
+
+    // Init the raster IRQ system to use the kernal iterrupt vector
+	rirq_init_kernal();
+
+	// Init the music interrupt on raster line 250
+	rirq_build(&frame_rirq, 1);
+	rirq_call(&frame_rirq, 0, frame_irq);
+	rirq_set(0, 50, &frame_rirq);
+
+	// Prepare the raster IRQ order
+	rirq_sort();
+
+	// start raster IRQ processing
+	rirq_start();
+
+
 
     for(;;) {
         main_loop();
