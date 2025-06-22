@@ -285,8 +285,9 @@ void draw_digit(input_t input)
  */
 void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
 {
+    uint16_t screen_pos = y * 40 + x;
     for(uint8_t i = 0; i < num_values; i++) {
-        Screen[y * 40 + x + i] = activation_histogram_levels[round_to_uint8(values[i] * 8)];
+        Screen[screen_pos + i] = activation_histogram_levels[round_to_uint8(values[i] * 8)];
     }
 }
 
@@ -575,6 +576,8 @@ __interrupt void frame_irq(void)
             last_pressed_key = 0;
         }
 
+        // Draw currently processed digit
+        // TODO: save cycles by checking if an update is effectively needed
         draw_digit(training.batch[training.record_index]);
 
         break;
