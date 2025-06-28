@@ -80,6 +80,7 @@ const char sprite_data[] = {
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
+#define ROUND_TO_INT8(x) (((x) >= 0) ? (int8_t)((x) + 0.5) : (int8_t)((x) - 0.5))
 
 #define R6510   ((char *)0x0001)
 #define Screen	((char *)0xcc00)
@@ -124,8 +125,12 @@ CharWin cw_menu;
 CharWin cw_terminal;
 CharWin cw_canvas;
 
+RIRQCode	frame_rirq;
+
 // Buffer used for terminal output
 char terminal_buf[37];
+char raster_buf[5];
+char raster_buf2[5];
 
 // Whenever a key is pressed during an interrupt check its value is stored here
 char last_pressed_key;
@@ -137,6 +142,7 @@ static const char activation_histogram_levels[9] = { 32, 100, 111, 121, 98, 248,
 enum ApplicationState {
 	AS_READY,			// Getting ready
 	AS_TRAINING,		// Network is training
+    AS_ACCURACY_CHECK,  // Network is checking its parameters
 	AS_DRAWING,		    // User is drawing a digit
 	AS_LOADING,		    // Loading parameters
 	AS_SAVING		    // Saving parameters
@@ -162,7 +168,8 @@ static const char * main_menu_texts[] = {
   "F1-TRAIN",
   "F3-SAVE PARAMS",
   "F5-LOAD PARAMS",
-  "F7-DRAW DIGIT"
+  "F7-DRAW DIGIT",
+  "F8-VERIFY ACCURACY"
 };
 
 static const char * training_menu_texts[] = {
@@ -193,16 +200,8 @@ void keypressed(void)
 	}
 }
 
-// Small round function to be inlined
-// Candidate to be converted into a macro
-static inline int8_t round_to_uint8(float x)
-{
-    return (x >= 0) ? (int8_t)(x + 0.5) : (int8_t)(x - 0.5);
-}
-
 // Forward declaration
 void application_state(ApplicationState state);
-
 
 /*
  * Displays main menu data
@@ -282,12 +281,14 @@ void draw_digit(input_t input)
 /*
  * Draws a histogram using PETSCII characters starting at a specific screen coordinate
  * x and y arguments refer to screen coordinates
+ * Note: despite its simplicity it's actually quite slow due to floating point operations
+ * In this form it's not a good candidate to raster interrupt inclusion
  */
 void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
 {
     uint16_t screen_pos = y * 40 + x;
     for(uint8_t i = 0; i < num_values; i++) {
-        Screen[screen_pos + i] = activation_histogram_levels[round_to_uint8(values[i] * 8)];
+        Screen[screen_pos + i] = activation_histogram_levels[ROUND_TO_INT8(values[i] * 8.0)];
     }
 }
 
@@ -298,42 +299,33 @@ void petscii_histogram(uint8_t x, uint8_t y, float values[], uint8_t num_values)
  */
 void train_loop(NeuralNetwork *neural_network, Training *training)
 {
-    init_network(neural_network);
     init_training(training);
+    init_network(neural_network);
     while(!training->stopped && training->batch_index > -1) {
         load_training_batch(DRIVE_NO, training);
-        training->batch_index--;
         while(!training->stopped && training->record_index < training->loaded_records) {
             train(neural_network, training->batch[training->record_index], training->batch[training->record_index][BATCH_ROW_LENGTH - 1]);
+            training->processed++;
             training->record_index++;
         }
+        training->batch_index--;
     }
 }
 
 /*
- * Accuracy loop, it takes a random batch and checks every record against current network
+ * Takes a random batch and checks every record against current network
+ * to verify current accuracy
  */
 void accuracy_loop(NeuralNetwork *neural_network, Training *training)
 {
-    bool stop = false;
     init_training(training);
-    spr_show(0, true);
     load_training_batch(DRIVE_NO, training);
-    for(uint8_t record = 0; record < training->loaded_records; record++) {
-        if (stop) break;
-        draw_digit(training->batch[record]);
-        uint8_t guessed_digit  = predict(neural_network, training->batch[record]);
-        petscii_histogram(19, 2, neural_network->activations_hidden, HIDDEN_LAYER_SIZE);
-        petscii_histogram(19, 4, neural_network->activations_output, OUTPUT_LAYER_SIZE);
-        training->correct += training->batch[record][BATCH_ROW_LENGTH - 1] == guessed_digit;
-        sprintf(terminal_buf, "ACCURACY=%.2f", ((float)training->correct / ++training->processed) * 100);
-        window_log(&cw_terminal, terminal_buf);
-
-        if (kbhit()) {
-            stop = confirm(&cw_terminal, "STOP VERIFYING? (Y/N)");
-        }
+    while(!training->stopped && training->record_index < training->loaded_records) {
+        uint8_t guessed_digit  = predict(neural_network, training->batch[training->record_index]);
+        training->correct += training->batch[training->record_index][BATCH_ROW_LENGTH - 1] == guessed_digit;
+        training->processed++;
+        training->record_index++;
     }
-    spr_show(0, false);
 }
 
 /*
@@ -491,13 +483,21 @@ void application_state(ApplicationState state)
         window_log(&cw_terminal, "PUT A RECORD ON");
         spr_show(0, true);
         train_loop(&TheApplication.neural_network, &training);
+        spr_show(0, false);            
+        application_state(AS_READY);
+        break;
+    case AS_ACCURACY_CHECK:
+        spr_show(0, true);
+        accuracy_loop(&TheApplication.neural_network, &training);
         spr_show(0, false);
+        sprintf(terminal_buf, "ACCURACY=%.2f%%", ((float)training.correct / training.processed) * 100.0);
+        window_log(&cw_terminal, terminal_buf);
         application_state(AS_READY);
         break;
 	case AS_SAVING:
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
-        if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
-            window_log(&cw_terminal, "SAVING PARAMETERS...");
+        if (confirm(&cw_terminal, "SAVE PARAMETERS? (Y/N)")) {
+            window_log(&cw_terminal, "SAVING...");
             save_bytes("@0:WH,U,W", DRIVE_NO, TheApplication.neural_network.weights_hidden, sizeof(TheApplication.neural_network.weights_hidden));
             save_bytes("@0:WO,U,W", DRIVE_NO, TheApplication.neural_network.weights_output, sizeof(TheApplication.neural_network.weights_output));
             save_bytes("@0:BH,U,W", DRIVE_NO, TheApplication.neural_network.biases_hidden, sizeof(TheApplication.neural_network.biases_hidden));
@@ -508,8 +508,8 @@ void application_state(ApplicationState state)
         break;
 	case AS_LOADING:
         cwin_fill_rect(&cw_menu, 0, 0, cw_menu.wx, cw_menu.wy, ' ', MENU_COLOR);
-        if (confirm(&cw_terminal, "ARE YOU SURE? (Y/N)")) {
-            window_log(&cw_terminal, "LOADING PARAMETERS...");
+        if (confirm(&cw_terminal, "LOAD PARAMETERS? (Y/N)")) {
+            window_log(&cw_terminal, "LOADING...");
             load_bytes("WH,U,R", DRIVE_NO, TheApplication.neural_network.weights_hidden, sizeof(TheApplication.neural_network.weights_hidden));
             load_bytes("WO,U,R", DRIVE_NO, TheApplication.neural_network.weights_output, sizeof(TheApplication.neural_network.weights_output));
             load_bytes("BH,U,R", DRIVE_NO, TheApplication.neural_network.biases_hidden, sizeof(TheApplication.neural_network.biases_hidden));
@@ -549,6 +549,9 @@ void main_loop()
 	            case PETSCII_F7:
                 application_state(AS_DRAWING);
                 break;
+	            case PETSCII_F8:
+                application_state(AS_ACCURACY_CHECK);
+                break;
 		    }
         }
 		break;
@@ -566,30 +569,35 @@ void main_loop()
 __interrupt void frame_irq(void)
 {
 	vic.color_border++;
+    static uint16_t last_processed = UINT16_MAX; // Keep track of last processed batch item 
 	switch (TheApplication.state) {
-	case AS_TRAINING:
-        // We're training the network, if RUN/STOP is pressed flag "stopped" in Training structure is set
-        // Inside training loop the flag is checked at every step, if set training is interrupted (pun not intended)
-        keypressed();
-        if (last_pressed_key & KSCAN_QUAL_DOWN) {
-            if ((last_pressed_key & KSCAN_QUAL_MASK) == KSCAN_STOP) training.stopped = true;
-            last_pressed_key = 0;
-        }
+        case AS_TRAINING:
+        case AS_ACCURACY_CHECK:
+            // We're training the network or verifying its accuracy, if RUN/STOP is pressed flag "stopped" in Training structure is set
+            // While looping the flag is checked at every step, if it's set the loop is interrupted (pun not intended)
+            keypressed();
+            if (last_pressed_key & KSCAN_QUAL_DOWN) {
+                if ((last_pressed_key & KSCAN_QUAL_MASK) == KSCAN_STOP) training.stopped = true;
+                last_pressed_key = 0;
+            }
 
-        // Draw currently processed digit
-        // TODO: save cycles by checking if an update is effectively needed
-        draw_digit(training.batch[training.record_index]);
+            // Draw currently processed digit and display some info,
+            // but only if it changed since last frame
+            if (training.processed != last_processed) {
+                draw_digit(training.batch[training.record_index]);
 
-        break;
-    default:
-        break;
+                itoa(training.batch_index, raster_buf, 10);
+                itoa(training.record_index, raster_buf2, 10);
+                cwin_putat_string(&cw_menu, 0, 6, raster_buf, MENU_COLOR);
+                cwin_putat_string(&cw_menu, 0, 7, raster_buf2, MENU_COLOR);
+                last_processed = training.processed;        
+            }
+            break;
+        default:
+            break;
     }
-
-
     vic.color_border--;
 }
-
-RIRQCode	frame_rirq;
 
 int main(void)
 {

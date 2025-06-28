@@ -11,7 +11,7 @@
  */
 typedef struct {
     batch_t batch;          // Current batch input data
-    uint8_t batch_index;    // Current batch index, loop is in reverse, so when index is -1 we know that the loop has ended
+    int8_t batch_index;    // Current batch index, loop is in reverse, so when index is -1 we know that the loop has ended
     uint8_t loaded_records; // How many records have been loaded from disk
     uint16_t correct;       // Total correct guesses
     uint16_t processed;     // How many record have been processed so far
